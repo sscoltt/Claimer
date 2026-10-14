@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "Big Ticket Queuer",
+  "version": "1.4.7",
+  "description": "Tells you the queue progress for each tab.",
+  "permissions": [
+    "tabs",
+    "storage",
+    "alarms",
+    "scripting",
+    "webNavigation",
+    "debugger"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Big Ticket Queuer",
+    "default_icon": "icon.png"
+  },
+  "icons": {
+    "16": "icon.png",
+    "48": "icon.png",
+    "128": "icon.png"
+  },
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "minimum_chrome_version": "125",
+  "incognito": "split"
+}

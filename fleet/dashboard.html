@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Fleet dashboard</title>
+<style>
+  body { font: 14px/1.5 system-ui, sans-serif; margin: 0 auto; padding: 20px 16px; max-width: 60rem; color: #1d2430; background: #f6f7f9; }
+  h1 { font-size: 20px; margin: 0 0 14px; }
+  form { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; background: #fff; border: 1px solid #d9dee6; border-radius: 8px; padding: 12px; }
+  label { display: block; font-size: 12px; color: #566173; }
+  input { display: block; font: inherit; padding: 6px 8px; border: 1px solid #b9c1cd; border-radius: 6px; margin-top: 3px; width: 6.5rem; }
+  #url { width: 22rem; max-width: 100%; }
+  button { font: inherit; font-weight: 600; padding: 7px 14px; border: 0; border-radius: 6px; background: #1f5fd0; color: #fff; cursor: pointer; }
+  button.quiet { background: #e3e7ee; color: #1d2430; }
+  button:disabled { opacity: .45; cursor: default; }
+  #summary { margin: 14px 0 4px; font-weight: 600; }
+  #error { color: #b3261e; margin: 4px 0; min-height: 1.5em; }
+  table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid #d9dee6; }
+  th { text-align: left; font-size: 12px; color: #566173; }
+  th, td { padding: 7px 10px; border-bottom: 1px solid #e6e9ef; vertical-align: top; }
+  td small { display: block; color: #566173; overflow-wrap: anywhere; }
+  tr.redirected td { background: #ffe9c7; font-weight: 600; }
+  tr.lead td { background: #e4f6ec; }
+  tr.closed td { color: #8a93a2; }
+  progress { display: block; width: 100%; min-width: 8rem; height: 10px; margin: 3px 0; accent-color: #1f5fd0; }
+  tr.lead progress { accent-color: #1e8a4c; }
+  .hint { color: #566173; font-size: 12px; margin-top: 10px; }
+</style></head><body>
+<h1>Fleet dashboard</h1>
+<form id="settings">
+  <label>Queue URL<input id="url" type="url" required></label>
+  <label>Windows<input id="count" type="number" min="1" max="200" step="1" required></label>
+  <label>Min delay (s)<input id="min" type="number" min="0" max="600" step="0.1" required></label>
+  <label>Max delay (s)<input id="max" type="number" min="0" max="600" step="0.1" required></label>
+  <button id="launch" type="submit">Open and monitor</button>
+  <button id="stop" type="button" class="quiet">Stop opening</button>
+  <button id="close" type="button" class="quiet">Close all windows</button>
+</form>
+<p id="summary">Connecting to the launcher...</p>
+<p id="error" role="alert"></p>
+<table>
+  <thead><tr><th>Place</th><th>Slot</th><th>Progress</th><th>Status</th><th></th></tr></thead>
+  <tbody id="rows"></tbody>
+</table>
+<p class="hint">Progress is how full each window's queue bar is, read from a picture of the page.
+The first window to leave the queue site is brought to the front automatically. Keep this page open while monitoring.</p>
+
+<script>
+const $ = id => document.getElementById(id);
+const fields = ['url', 'count', 'min', 'max'];
+const readings = new Map();   // slot -> {progress, at, error}
+const alerted = new Map();    // slot -> host already announced
+let state = null, filled = false, audio = null, jumped = false;
+
+const showError = e => { $('error').textContent = e.message || String(e); };
+// Chrome slows a hidden page's own timers, so pauses are waited out by the launcher instead.
+const getState = wait => fetch('/state?wait=' + wait).then(r => r.json());
+
+async function post(path, body = {}) {
+  const res = await fetch(path, { method: 'POST', body: JSON.stringify(body) });
+  const data = await res.json();
+  if (data.error) throw Error(data.error);
+}
+
+// One debugging command to one window, on a short-lived connection.
+function command(ws, method, params = {}) {
+  return new Promise((resolve, reject) => {
+    const socket = new WebSocket(ws);
+    const fail = message => { socket.close(); reject(Error(message)); };
+    const timer = setTimeout(() => fail('window did not answer'), 5000);
+    socket.onopen = () => socket.send(JSON.stringify({ id: 1, method, params }));
+    socket.onerror = () => { clearTimeout(timer); fail('could not reach the window'); };
+    socket.onmessage = event => {
+      clearTimeout(timer); socket.close();
+      const reply = JSON.parse(event.data);
+      reply.error ? reject(Error(reply.error.message)) : resolve(reply.result);
+    };
+  });
+}
+
+// How full the queue page's progress bar is, in percent: the green part's length against the whole
+// track, or null when no bar is showing. Read at full size: a thin bar is only a few pixels tall.
+async function progress(ws) {
+  const shot = await command(ws, 'Page.captureScreenshot', { format: 'png', captureBeyondViewport: true });
+  const image = await createImageBitmap(await (await fetch('data:image/png;base64,' + shot.data)).blob());
+  const width = image.width, height = image.height;
+  const context = new OffscreenCanvas(width, height).getContext('2d', { willReadFrequently: true });
+  context.drawImage(image, 0, 0);
+  image.close();
+  const pixels = context.getImageData(0, 0, width, height).data;
+  const near = (x, y, [r, g, b], tolerance) => {
+    const i = (y * width + x) * 4;
+    return Math.abs(pixels[i] - r) <= tolerance && Math.abs(pixels[i + 1] - g) <= tolerance && Math.abs(pixels[i + 2] - b) <= tolerance;
+  };
+  // shortcut: takes the row with the most bar colour as the bar, so a bigger green button elsewhere would win; check for that if readings look wrong.
+  let row = -1, most = 0;
+  for (let y = 0; y < height; y++) {
+    let count = 0;
+    for (let x = 0; x < width; x++) if (near(x, y, state.bar, state.tolerance)) count++;
+    if (count > most) { most = count; row = y; }
+  }
+  if (row < 0) return null;
+  // The filled part is the widest green stretch on that row, bridging the small gaps between blocks.
+  let from = 0, to = -1, start = 0, end = -Infinity;
+  for (let x = 0; x < width; x++) {
+    if (!near(x, row, state.bar, state.tolerance)) continue;
+    if (x - end > 8) start = x;
+    end = x;
+    if (end - start > to - from) { from = start; to = end; }
+  }
+  // The empty rest of the track is the colour just past the green (a few pixels out, past the
+  // blurred edge); follow it to the track's end.
+  let stop = Math.min(to + 6, width - 1);
+  const i = (row * width + stop) * 4, track = [pixels[i], pixels[i + 1], pixels[i + 2]];
+  while (stop + 1 < width && near(stop + 1, row, track, 16)) stop++;
+  return Math.min(100, (to - from + 1) / (stop - from + 1) * 100);
+}
+
+async function bringToFront(ws) {
+  const { windowId, bounds } = await command(ws, 'Browser.getWindowForTarget');
+  if (bounds.windowState === 'minimized') await command(ws, 'Browser.setWindowBounds', { windowId, bounds: { windowState: 'normal' } });
+  await command(ws, 'Page.bringToFront');
+}
+
+function beep() {
+  try {
+    audio ||= new AudioContext();
+    const tone = audio.createOscillator(), volume = audio.createGain();
+    tone.frequency.value = 880; volume.gain.value = 0.2;
+    tone.connect(volume).connect(audio.destination);
+    tone.start(); tone.stop(audio.currentTime + 0.6);
+  } catch {}
+}
+
+const ago = at => { const s = Math.round((Date.now() - at) / 1000); return s < 90 ? `read ${s}s ago` : 'read ' + new Date(at).toLocaleTimeString(); };
+
+function render() {
+  const slots = state.slots, busy = slots.length > 0;
+  if (!filled) {
+    let saved = {};
+    try { saved = JSON.parse(localStorage.getItem('fleet-settings')) || {}; } catch {}
+    for (const k of fields) $(k).value = saved[k] ?? state.defaults[k];
+    filled = true;
+  }
+  $('launch').disabled = busy; $('stop').disabled = !state.launching; $('close').disabled = !busy;
+
+  // Rank the windows still in the queue by how full their bar is; equal readings share a place.
+  const inQueue = slots.filter(s => s.status === 'queue' && readings.get(s.slot)?.progress != null);
+  const key = s => Math.round(readings.get(s.slot).progress);
+  const order = s => s.status === 'redirected' ? 0 : inQueue.includes(s) ? 1 : s.status === 'closed' ? 3 : 2;
+  const sorted = [...slots].sort((a, b) => order(a) - order(b) || (order(a) === 1 ? key(b) - key(a) : 0) || a.slot - b.slot);
+
+  const redirected = slots.filter(s => s.status === 'redirected');
+  $('summary').textContent = !busy ? 'No windows open.' :
+    `${slots.filter(s => s.status !== 'closed').length} of ${slots.length} windows open` +
+    (state.launching ? ' · still opening' : '') + (redirected.length ? ` · ${redirected.length} redirected` : '');
+  document.title = redirected.length ? `REDIRECTED: slot ${redirected.map(s => s.slot).join(', ')}` : 'Fleet dashboard';
+
+  $('rows').replaceChildren(...sorted.map(s => {
+    const reading = readings.get(s.slot), ranked = inQueue.includes(s);
+    const place = ranked ? 1 + inQueue.filter(o => key(o) > key(s)).length : null;
+    const tr = document.createElement('tr');
+    tr.className = s.status === 'redirected' ? 'redirected' : s.status === 'closed' ? 'closed' : place === 1 && inQueue.length > 1 ? 'lead' : '';
+    const cell = (main, note) => {
+      const td = tr.appendChild(document.createElement('td'));
+      td.textContent = main;
+      if (note) td.appendChild(document.createElement('small')).textContent = note;
+    };
+    cell(place ?? '—');
+    cell('#' + s.slot);
+    const score = ranked ? key(s) : null;
+    cell(ranked ? score + '%' : '—', s.status === 'queue' && reading ? reading.error || ago(reading.at) : '');
+    if (ranked) {
+      const td = tr.lastChild, bar = td.insertBefore(document.createElement('progress'), td.querySelector('small'));
+      bar.max = 100; bar.value = score; bar.setAttribute('aria-label', `Slot ${s.slot} queue progress`);
+    }
+    cell({ launching: 'Opening', queue: 'In queue', redirected: 'REDIRECTED', closed: 'Closed' }[s.status], s.status === 'redirected' ? s.url : '');
+    const open = document.createElement('button');
+    open.textContent = 'Open'; open.className = 'quiet'; open.disabled = !s.ws || s.status === 'closed';
+    open.onclick = () => bringToFront(s.ws).catch(showError);
+    tr.appendChild(document.createElement('td')).appendChild(open);
+    return tr;
+  }));
+}
+
+// Keeps the table current and announces each redirect once per new site.
+async function follow() {
+  for (;;) {
+    try {
+      state = await getState(state ? 1000 : 0);
+      for (const s of state.slots) {
+        if (s.status === 'redirected' && alerted.get(s.slot) !== s.host) {
+          alerted.set(s.slot, s.host); beep();
+          // Jump to the first window through the queue only; later ones must not steal focus from it.
+          if (!jumped) { jumped = true; bringToFront(s.ws).catch(showError); }
+        }
+        if (s.status === 'queue') alerted.delete(s.slot);
+      }
+      if (!state.slots.length) jumped = false;
+      for (const slot of readings.keys()) if (!state.slots.some(s => s.slot === slot)) { readings.delete(slot); alerted.delete(slot); }
+      render();
+      if ($('error').textContent === 'The launcher is not answering.') $('error').textContent = '';
+    } catch {
+      $('error').textContent = 'The launcher is not answering.';
+      await new Promise(r => setTimeout(r, 2000));
+    }
+  }
+}
+
+// Reads every queued window's progress bar, one window at a time, round after round.
+async function scan() {
+  for (;;) {
+    for (const s of state?.slots || []) {
+      if (s.status !== 'queue' || !s.ws) continue;
+      try { readings.set(s.slot, { progress: await progress(s.ws), at: Date.now() }); }
+      catch (e) { readings.set(s.slot, { ...readings.get(s.slot), error: e.message }); }
+    }
+    await getState(500).catch(() => new Promise(r => setTimeout(r, 2000)));
+  }
+}
+
+$('settings').onsubmit = async event => {
+  event.preventDefault(); $('error').textContent = '';
+  const settings = { url: $('url').value.trim(), count: Number($('count').value), min: Number($('min').value), max: Number($('max').value) };
+  try { localStorage.setItem('fleet-settings', JSON.stringify(settings)); } catch {}
+  audio ||= new AudioContext();   // sound is only allowed after a click on this page
+  post('/launch', settings).catch(showError);
+};
+$('stop').onclick = () => post('/stop').catch(showError);
+$('close').onclick = () => { if (confirm('Close every fleet window?')) post('/close').catch(showError); };
+
+follow(); scan();
+</script>
+</body></html>

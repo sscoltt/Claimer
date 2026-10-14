@@ -1,0 +1,20 @@
+Setting up on a new Windows PC
+==============================
+
+1. Install Google Chrome (https://www.google.com/chrome/) if it is not there already.
+2. Install Python 3 (https://www.python.org/downloads/). During setup, tick
+   "Add python.exe to PATH".
+3. Right-click the zip > Properties > tick "Unblock" > OK. Then right-click > Extract All.
+   Run everything from the extracted folder, not from inside the zip.
+4. Double-click start.bat. The dashboard opens in your browser. Leave the black window open.
+   If Windows says "Windows protected your PC", click More info > Run anyway.
+
+To try it with the fake queue first: double-click start-test-queue.bat, then in the dashboard
+set the Queue URL to http://localhost:8000/client and open a few windows.
+
+The fleet's Chrome profiles are created fresh in fleet\chrome-data on first launch, so the
+windows start signed out of everything.
+
+Memory: every window is a separate Chrome profile. On a 16 GB laptop, start with about 20
+windows, watch Task Manager, and add more only if memory stays below about 85%.
+Plug the laptop in and stop it sleeping (Settings > System > Power) while a queue runs.

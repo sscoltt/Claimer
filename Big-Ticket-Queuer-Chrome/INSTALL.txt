@@ -1,0 +1,7 @@
+Big Ticket Queuer for Chrome 1.4.7
+
+To install, extract the ZIP to a permanent folder, open chrome://extensions, enable Developer mode, choose Load unpacked, and select Big Ticket Queuer Extension (the folder with manifest.json). Open the extension and complete normal activation.
+
+To update an existing unpacked installation, stop monitoring and close old queue tabs. Back up the existing folder, copy the contents of Big Ticket Queuer Extension into the SAME folder, retain the same Chrome profile, and click Reload.
+
+Requires Chrome 125 or later. Developer mode is a Chrome installation setting; this is the activated public product edition. Keep the extracted folder after installation.

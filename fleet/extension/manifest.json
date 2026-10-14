@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "Fleet Redirect Watcher",
+  "version": "1.0.0",
+  "description": "Watches this window for redirects away from the target site and notifies you.",
+  "permissions": [
+    "tabs",
+    "webNavigation",
+    "notifications",
+    "storage"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "icons": {
+    "128": "icon128.png"
+  }
+}

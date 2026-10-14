@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Test queue</title>
+<style>
+  /* Colours sampled from "Queue image.JPG". */
+  body { font: 15px/1.5 system-ui, sans-serif; margin: 0; padding: 40px 16px; background: #767676; color: #fff; text-align: center; }
+  .track { position: relative; max-width: 472px; height: 32px; margin: 24px auto; padding: 4px; box-sizing: border-box; background: #4D4D4D; border-radius: 4px; }
+  /* Must match BAR_COLOR in launcher.py: the dashboard counts pixels of this colour. */
+  #fill { height: 100%; width: 0; background: repeating-linear-gradient(90deg, #1CBD81 0 10px, transparent 10px 12px); }
+  #walker { position: absolute; top: 4px; left: 4px; width: 14px; height: 24px; background: #1CBD81; border-radius: 2px; }
+  #walker svg { display: block; width: 14px; height: 24px; stroke: #fff; stroke-width: 1.6; stroke-linecap: round; fill: none; }
+  .leg, .arm { transform-box: view-box; animation: swing .8s ease-in-out infinite alternate; }
+  .leg { transform-origin: 7px 13px; }
+  .arm { transform-origin: 7px 8px; }
+  .b { animation-direction: alternate-reverse; }
+  @keyframes swing { from { transform: rotate(-25deg); } to { transform: rotate(25deg); } }
+</style></head><body>
+<p>You are now in line. Test queue: about <b id="eta"></b> seconds for this tab.</p>
+<div class="track">
+  <div id="fill"></div>
+  <div id="walker" aria-hidden="true"><svg viewBox="0 0 14 24">
+    <circle cx="7" cy="4" r="2" fill="#fff" stroke="none"/>
+    <line x1="7" y1="7" x2="7" y2="13"/>
+    <line class="arm" x1="7" y1="8" x2="7" y2="12"/><line class="arm b" x1="7" y1="8" x2="7" y2="12"/>
+    <line class="leg" x1="7" y1="13" x2="7" y2="20"/><line class="leg b" x1="7" y1="13" x2="7" y2="20"/>
+  </svg></div>
+</div>
+<p id="pct">0%</p>
+<script>
+// Each tab gets its own random length, so the dashboard has something to rank.
+// ?seconds=N fixes the length, e.g. /client/?seconds=20 for a quick run.
+const seconds = Number(new URLSearchParams(location.search).get('seconds')) || 30 + Math.random() * 120;
+const start = Date.now(), fill = document.getElementById('fill'), walker = document.getElementById('walker');
+document.getElementById('eta').textContent = Math.round(seconds);
+// A timer, not requestAnimationFrame: Chrome pauses animation frames in hidden windows.
+const tick = setInterval(() => {
+  const pct = Math.min(100, (Date.now() - start) / seconds / 10);
+  // The walker leads the green blocks and creeps forward smoothly.
+  const room = fill.parentElement.clientWidth - 8 - walker.offsetWidth;
+  fill.style.width = room * pct / 100 + 'px';
+  walker.style.left = 4 + room * pct / 100 + 'px';
+  document.getElementById('pct').textContent = Math.floor(pct) + '%';
+  // A different hostname, so the launcher sees the tab leave the queue site.
+  if (pct >= 100) { clearInterval(tick); location.href = 'http://127.0.0.1:8000/done.html'; }
+}, 100);
+</script>
+</body></html>

@@ -1,0 +1,3 @@
+# Chrome profiles for the fleet windows: holds logins and cookies, and is recreated on first launch.
+fleet/chrome-data/
+__pycache__/
